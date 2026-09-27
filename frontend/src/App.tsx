@@ -1,4 +1,3 @@
-
 import { useState } from "react"
 
 type Message = {
@@ -20,6 +19,17 @@ type ResearchResponse = {
   execution_time: number
 }
 
+type PendingEmail = {
+  recipient: string
+  subject: string
+  body: string
+}
+
+type PendingEmailResponse = {
+  pending: boolean
+  email: PendingEmail | null
+}
+
 function App() {
   const [topic, setTopic] = useState("")
   const [messages, setMessages] = useState<Message[]>([])
@@ -27,16 +37,47 @@ function App() {
 
   const [sources, setSources] = useState<Source[]>([])
   const [toolsUsed, setToolsUsed] = useState<string[]>([])
-  const [executionTime, setExecutionTime] = useState<number | null>(null)
+  const [executionTime, setExecutionTime] =
+    useState<number | null>(null)
   const [report, setReport] = useState("")
 
-  // Current research session
-  const [threadId, setThreadId] = useState<string | null>(null)
+  const [threadId, setThreadId] =
+    useState<string | null>(null)
 
-  // Feedback state
   const [feedback, setFeedback] = useState<
     "positive" | "negative" | null
   >(null)
+
+  const [pendingEmail, setPendingEmail] =
+    useState<PendingEmail | null>(null)
+
+  const [emailLoading, setEmailLoading] =
+    useState(false)
+
+  const checkPendingEmail = async (
+    currentThreadId: string,
+  ) => {
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:8000/email/pending/${currentThreadId}`,
+      )
+
+      if (!response.ok) {
+        throw new Error(
+          "Failed to check pending email",
+        )
+      }
+
+      const data: PendingEmailResponse =
+        await response.json()
+
+      setPendingEmail(
+        data.pending ? data.email : null,
+      )
+    } catch (error) {
+      console.error(error)
+    }
+  }
 
   const handleResearch = async () => {
     const trimmedTopic = topic.trim()
@@ -61,27 +102,35 @@ function App() {
     setExecutionTime(null)
     setReport("")
     setFeedback(null)
+    setPendingEmail(null)
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/research", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const response = await fetch(
+        "http://127.0.0.1:8000/research",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            topic: trimmedTopic,
+            thread_id: threadId,
+          }),
         },
-        body: JSON.stringify({
-          topic: trimmedTopic,
-          thread_id: threadId,
-        }),
-      })
+      )
 
       if (!response.ok) {
-        throw new Error("Backend request failed")
+        throw new Error(
+          "Backend request failed",
+        )
       }
 
-      const data: ResearchResponse = await response.json()
+      const data: ResearchResponse =
+        await response.json()
 
-      // Save the session/thread ID
       setThreadId(data.thread_id)
+
+      checkPendingEmail(data.thread_id)
 
       setMessages((current) => [
         ...current,
@@ -112,26 +161,33 @@ function App() {
   }
 
   const handleFeedback = async (
-    selectedFeedback: "positive" | "negative",
+    selectedFeedback:
+      | "positive"
+      | "negative",
   ) => {
     if (!threadId) {
       return
     }
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/feedback", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const response = await fetch(
+        "http://127.0.0.1:8000/feedback",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            thread_id: threadId,
+            feedback: selectedFeedback,
+          }),
         },
-        body: JSON.stringify({
-          thread_id: threadId,
-          feedback: selectedFeedback,
-        }),
-      })
+      )
 
       if (!response.ok) {
-        throw new Error("Feedback request failed")
+        throw new Error(
+          "Feedback request failed",
+        )
       }
 
       const data = await response.json()
@@ -144,25 +200,81 @@ function App() {
     }
   }
 
+  const handleEmailApproval = async (
+    approved: boolean,
+  ) => {
+    if (!threadId || !pendingEmail) {
+      return
+    }
+
+    setEmailLoading(true)
+
+    try {
+      const response = await fetch(
+        "http://127.0.0.1:8000/email/approval",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            thread_id: threadId,
+            approved,
+          }),
+        },
+      )
+
+      if (!response.ok) {
+        throw new Error(
+          "Email approval request failed",
+        )
+      }
+
+      const data = await response.json()
+
+      if (data.success) {
+        setPendingEmail(null)
+
+        setMessages((current) => [
+          ...current,
+          {
+            role: "assistant",
+            content: data.message,
+          },
+        ])
+      }
+    } catch (error) {
+      console.error(error)
+    } finally {
+      setEmailLoading(false)
+    }
+  }
+
   return (
     <div className="app">
       <header className="header">
         <div>
           <h1>Research Assistant</h1>
-          <p>AI-powered research and analysis</p>
+          <p>
+            AI-powered research and analysis
+          </p>
         </div>
       </header>
 
       <main className="container">
         <section className="research-input">
-          <label htmlFor="topic">Research Topic</label>
+          <label htmlFor="topic">
+            Research Topic
+          </label>
 
           <div className="input-row">
             <input
               id="topic"
               type="text"
               value={topic}
-              onChange={(event) => setTopic(event.target.value)}
+              onChange={(event) =>
+                setTopic(event.target.value)
+              }
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   handleResearch()
@@ -174,9 +286,13 @@ function App() {
 
             <button
               onClick={handleResearch}
-              disabled={loading || !topic.trim()}
+              disabled={
+                loading || !topic.trim()
+              }
             >
-              {loading ? "Researching..." : "Start Research"}
+              {loading
+                ? "Researching..."
+                : "Start Research"}
             </button>
           </div>
         </section>
@@ -188,21 +304,30 @@ function App() {
             <div className="chat-messages">
               {messages.length === 0 ? (
                 <div className="empty-state">
-                  <p>Start a research topic to begin.</p>
+                  <p>
+                    Start a research topic to begin.
+                  </p>
                 </div>
               ) : (
-                messages.map((message, index) => (
-                  <div
-                    key={index}
-                    className={`message ${message.role}`}
-                  >
-                    <strong>
-                      {message.role === "user" ? "You" : "Agent"}
-                    </strong>
+                messages.map(
+                  (message, index) => (
+                    <div
+                      key={index}
+                      className={`message ${message.role}`}
+                    >
+                      <strong>
+                        {message.role ===
+                        "user"
+                          ? "You"
+                          : "Agent"}
+                      </strong>
 
-                    <p>{message.content}</p>
-                  </div>
-                ))
+                      <p>
+                        {message.content}
+                      </p>
+                    </div>
+                  ),
+                )
               )}
 
               {loading && (
@@ -223,19 +348,26 @@ function App() {
               </div>
             ) : (
               <div className="sources-list">
-                {sources.map((source, index) => (
-                  <div className="source-item" key={index}>
-                    <strong>{source.title}</strong>
-
-                    <a
-                      href={source.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                {sources.map(
+                  (source, index) => (
+                    <div
+                      className="source-item"
+                      key={index}
                     >
-                      Open source
-                    </a>
-                  </div>
-                ))}
+                      <strong>
+                        {source.title}
+                      </strong>
+
+                      <a
+                        href={source.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Open source
+                      </a>
+                    </div>
+                  ),
+                )}
               </div>
             )}
           </div>
@@ -250,7 +382,8 @@ function App() {
             ) : (
               <div className="empty-state">
                 <p>
-                  Your final research report will appear here.
+                  Your final research report
+                  will appear here.
                 </p>
               </div>
             )}
@@ -284,20 +417,30 @@ function App() {
 
               <div className="feedback-buttons">
                 <button
-                  onClick={() => handleFeedback("positive")}
+                  onClick={() =>
+                    handleFeedback("positive")
+                  }
                   disabled={!threadId}
                   style={{
-                    opacity: feedback === "positive" ? 1 : 0.6,
+                    opacity:
+                      feedback === "positive"
+                        ? 1
+                        : 0.6,
                   }}
                 >
                   👍
                 </button>
 
                 <button
-                  onClick={() => handleFeedback("negative")}
+                  onClick={() =>
+                    handleFeedback("negative")
+                  }
                   disabled={!threadId}
                   style={{
-                    opacity: feedback === "negative" ? 1 : 0.6,
+                    opacity:
+                      feedback === "negative"
+                        ? 1
+                        : 0.6,
                   }}
                 >
                   👎
@@ -305,6 +448,51 @@ function App() {
               </div>
             </div>
           </div>
+
+          {pendingEmail && (
+            <div className="panel email-approval-panel">
+              <h2>Email Approval</h2>
+
+              <p>
+                The research report is ready
+                to be sent by email.
+              </p>
+
+              <div className="email-details">
+                <p>
+                  <strong>To:</strong>{" "}
+                  {pendingEmail.recipient}
+                </p>
+
+                <p>
+                  <strong>Subject:</strong>{" "}
+                  {pendingEmail.subject}
+                </p>
+              </div>
+
+              <div className="email-approval-buttons">
+                <button
+                  onClick={() =>
+                    handleEmailApproval(true)
+                  }
+                  disabled={emailLoading}
+                >
+                  {emailLoading
+                    ? "Processing..."
+                    : "Approve"}
+                </button>
+
+                <button
+                  onClick={() =>
+                    handleEmailApproval(false)
+                  }
+                  disabled={emailLoading}
+                >
+                  Reject
+                </button>
+              </div>
+            </div>
+          )}
         </section>
       </main>
     </div>

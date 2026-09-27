@@ -1,11 +1,73 @@
+import ipaddress
+import socket
+from urllib.parse import urlparse
+
 import requests
 from bs4 import BeautifulSoup
 from langchain.tools import tool
-from urllib.parse import urlparse
 
 
 ARTICLE_TIMEOUT = 10
 MAX_CONTENT_LENGTH = 6000
+
+
+def _is_safe_url(url: str) -> bool:
+    parsed_url = urlparse(url)
+
+    if parsed_url.scheme not in {"http", "https"}:
+        return False
+
+    hostname = parsed_url.hostname
+
+    if not hostname:
+        return False
+
+    hostname = hostname.lower()
+
+    blocked_hosts = {
+        "localhost",
+        "localhost.localdomain",
+    }
+
+    if hostname in blocked_hosts:
+        return False
+
+    try:
+        ip = ipaddress.ip_address(hostname)
+
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+        ):
+            return False
+
+    except ValueError:
+        try:
+            resolved_ips = socket.getaddrinfo(
+                hostname,
+                None,
+            )
+
+            for result in resolved_ips:
+                resolved_ip = result[4][0]
+                ip = ipaddress.ip_address(resolved_ip)
+
+                if (
+                    ip.is_private
+                    or ip.is_loopback
+                    or ip.is_link_local
+                    or ip.is_reserved
+                    or ip.is_multicast
+                ):
+                    return False
+
+        except socket.gaierror:
+            return False
+
+    return True
 
 
 @tool
@@ -13,8 +75,9 @@ def fetch_article(url: str) -> str:
     """
     Fetch readable text from a news article URL.
 
-    Use this tool when the user needs more details from a specific
-    news article or when the agent needs to inspect a source.
+    Use this tool when the user needs more details
+    from a specific news article or when the agent
+    needs to inspect a source.
 
     Input:
         url: The URL of the article.
@@ -28,14 +91,8 @@ def fetch_article(url: str) -> str:
 
     url = url.strip()
 
-    # Validate URL format
-    parsed_url = urlparse(url)
-
-    if parsed_url.scheme not in {"http", "https"}:
-        return "Error: URL must use http or https."
-
-    if not parsed_url.netloc:
-        return "Error: Invalid URL."
+    if not _is_safe_url(url):
+        return "Error: URL is not allowed for security reasons."
 
     try:
         response = requests.get(
@@ -56,9 +113,14 @@ def fetch_article(url: str) -> str:
             "html.parser",
         )
 
-        # Remove elements that are not useful article content
         for element in soup(
-            ["script", "style", "nav", "footer", "header"]
+            [
+                "script",
+                "style",
+                "nav",
+                "footer",
+                "header",
+            ]
         ):
             element.decompose()
 
@@ -68,9 +130,11 @@ def fetch_article(url: str) -> str:
         )
 
         if not text:
-            return "Error: No readable article content found."
+            return (
+                "Error: No readable article "
+                "content found."
+            )
 
-        # Limit large tool output
         text = text[:MAX_CONTENT_LENGTH]
 
         return text
@@ -83,11 +147,12 @@ def fetch_article(url: str) -> str:
 
     except requests.RequestException as error:
         return (
-            f"Error: Article request failed: {str(error)}"
+            f"Error: Article request failed: "
+            f"{str(error)}"
         )
 
     except Exception as error:
         return (
-            f"Error: Unexpected article tool failure: "
-            f"{str(error)}"
+            f"Error: Unexpected article tool "
+            f"failure: {str(error)}"
         )

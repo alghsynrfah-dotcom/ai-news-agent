@@ -7,7 +7,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from backend.tools.news_tool import get_news
 from backend.tools.article_tool import fetch_article
-
+from backend.tools.summarization_tool import summarize_article
+from backend.tools.calculator_tool import calculate
+from backend.tools.email_tool import send_email
 load_dotenv()
 
 
@@ -47,13 +49,26 @@ Rules:
 - Do not invent news or sources.
 - If a tool fails, explain the error clearly.
 - Keep the final answer concise.
+- Use summarize_article when you need to summarize article content.
+- For research tasks, you may use multiple tools sequentially:
+  get_news -> fetch_article -> summarize_article.
+- Use calculate only when the user needs a mathematical calculation.
+- Do not use calculate for general questions.
+- Use send_email only when the user explicitly asks to send a report by email.
+- Sending an email is a sensitive external action.
+- Never send an email unless the application has received explicit user approval.
+
 """
 
     agent = create_agent(
         model=model,
-        tools=[get_news, fetch_article],
-        system_prompt=system_prompt,
-        checkpointer=checkpointer,
+       tools=[
+    get_news,
+    fetch_article,
+    summarize_article,
+    calculate,
+    send_email,
+    ],
     )
 
     return agent

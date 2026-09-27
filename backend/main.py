@@ -4,13 +4,20 @@ from pydantic import BaseModel
 
 from backend.services.research_service import run_research
 from backend.services.guardrails import validate_research_topic
+
 from backend.memory.session_memory import (
     create_session,
     get_session,
     update_session,
+    get_pending_email,
+    clear_pending_email,
 )
 
+from backend.tools.email_tool import send_email
+from langgraph.types import interrupt
+
 app = FastAPI(title="AI News Research Agent")
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,10 +31,14 @@ app.add_middleware(
 )
 
 
+# --------------------------------------------------
+# Request / Response Models
+# --------------------------------------------------
+
 class ResearchRequest(BaseModel):
     topic: str
     thread_id: str | None = None
-    
+
 
 class ResearchResponse(BaseModel):
     thread_id: str
@@ -38,15 +49,30 @@ class ResearchResponse(BaseModel):
     execution_time: float
 
 
-
 class FeedbackRequest(BaseModel):
     thread_id: str
     feedback: str
-    
+
+
+class EmailApprovalRequest(BaseModel):
+    thread_id: str
+    approved: bool
+
+
+# --------------------------------------------------
+# Root
+# --------------------------------------------------
+
 @app.get("/")
 def root():
-    return {"message": "AI News Agent API is running"}
+    return {
+        "message": "AI News Agent API is running"
+    }
 
+
+# --------------------------------------------------
+# Session
+# --------------------------------------------------
 
 @app.post("/session")
 def create_new_session():
@@ -55,13 +81,17 @@ def create_new_session():
     return {
         "thread_id": thread_id
     }
+
+
+# --------------------------------------------------
+# Feedback
+# --------------------------------------------------
+
 @app.post("/feedback")
 def submit_feedback(request: FeedbackRequest):
-
     thread_id = request.thread_id
     feedback = request.feedback.strip().lower()
 
-    # Make sure the session exists
     session = get_session(thread_id)
 
     if not session:
@@ -70,18 +100,16 @@ def submit_feedback(request: FeedbackRequest):
             "message": "Session not found.",
         }
 
-    # Validate feedback value
     if feedback not in {"positive", "negative"}:
         return {
             "success": False,
             "message": "Feedback must be positive or negative.",
         }
 
-    # Save feedback to the session
     update_session(
         thread_id,
         {
-            "feedback": feedback,
+            "feedback": feedback
         },
     )
 
@@ -91,16 +119,82 @@ def submit_feedback(request: FeedbackRequest):
         "feedback": feedback,
     }
 
-@app.post("/research", response_model=ResearchResponse)
-def research(request: ResearchRequest):
 
+# --------------------------------------------------
+# Email Approval
+# --------------------------------------------------
+
+@app.post("/email/approval")
+def email_approval(request: EmailApprovalRequest):
+    thread_id = request.thread_id
+
+    pending_email = get_pending_email(thread_id)
+
+    if not pending_email:
+        return {
+            "success": False,
+            "message": "No pending email request found.",
+        }
+
+    # User rejected the email
+    if not request.approved:
+        clear_pending_email(thread_id)
+
+        return {
+            "success": True,
+            "message": "Email sending was rejected.",
+        }
+@app.get("/email/pending/{thread_id}")
+def get_pending_email_request(thread_id: str):
+    pending_email = get_pending_email(thread_id)
+
+    if not pending_email:
+        return {
+            "pending": False,
+            "email": None,
+        }
+
+    return {
+        "pending": True,
+        "email": pending_email,
+    }
+    # User approved the email
+    result = send_email.invoke(
+        {
+            "recipient": pending_email["recipient"],
+            "subject": pending_email["subject"],
+            "body": pending_email["body"],
+        }
+    )
+
+    clear_pending_email(thread_id)
+
+    if result.startswith("Error:"):
+        return {
+            "success": False,
+            "message": result,
+        }
+
+    return {
+        "success": True,
+        "message": result,
+    }
+
+
+# --------------------------------------------------
+# Research
+# --------------------------------------------------
+
+@app.post(
+    "/research",
+    response_model=ResearchResponse,
+)
+def research(request: ResearchRequest):
     topic = request.topic.strip()
 
-    # -----------------------------
-    # Guardrail validation
-    # -----------------------------
-
-    is_valid, error_message = validate_research_topic(topic)
+    is_valid, error_message = validate_research_topic(
+        topic
+    )
 
     if not is_valid:
         return {
@@ -112,38 +206,25 @@ def research(request: ResearchRequest):
             "execution_time": 0,
         }
 
-    # -----------------------------
-    # Session / Thread
-    # -----------------------------
-
     thread_id = request.thread_id
 
     if not thread_id or not get_session(thread_id):
         thread_id = create_session()
 
     try:
-
-        # -----------------------------
-        # Get conversation history
-        # -----------------------------
-
         session = get_session(thread_id)
 
-        history = session["messages"] if session else []
-
-        # -----------------------------
-        # Run Agent
-        # -----------------------------
+        history = (
+            session["messages"]
+            if session
+            else []
+        )
 
         result = run_research(
             topic=topic,
             conversation_history=history,
             thread_id=thread_id,
         )
-
-        # -----------------------------
-        # Update session memory
-        # -----------------------------
 
         update_session(
             thread_id,
@@ -164,10 +245,6 @@ def research(request: ResearchRequest):
             },
         )
 
-        # -----------------------------
-        # Return response
-        # -----------------------------
-
         return {
             "thread_id": thread_id,
             "topic": topic,
@@ -178,7 +255,6 @@ def research(request: ResearchRequest):
         }
 
     except Exception as error:
-
         return {
             "thread_id": thread_id,
             "topic": topic,
