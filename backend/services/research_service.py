@@ -1,17 +1,18 @@
-import json
+
 import time
 
 from backend.agent.agent import create_news_agent
+
 from backend.services.observability import (
     log_agent_start,
     log_agent_success,
     log_agent_error,
 )
+
 from backend.state.agent_state import AgentState
 
 
 MAX_HISTORY_MESSAGES = 10
-MAX_AGENT_STEPS = 6
 
 
 def run_research(
@@ -22,31 +23,42 @@ def run_research(
 
     start_time = time.perf_counter()
 
-    # Initial agent state
     state: AgentState = {
         "thread_id": thread_id or "",
         "topic": topic,
-        "messages": list(conversation_history or []),
+        "messages": list(
+            conversation_history or []
+        ),
         "sources": [],
         "tools_used": [],
         "execution_time": 0,
         "final_answer": "",
     }
 
-    log_agent_start(thread_id, topic)
+    log_agent_start(
+        thread_id,
+        topic,
+    )
 
     try:
+
         agent = create_news_agent()
 
-        # Copy conversation history
-        messages = list(conversation_history or [])
+        if agent is None:
+            raise RuntimeError(
+                "create_news_agent() returned None."
+            )
 
-        # Context management:
-        # keep only the most recent messages
+        messages = list(
+            conversation_history or []
+        )
+
         if len(messages) > MAX_HISTORY_MESSAGES:
-            messages = messages[-MAX_HISTORY_MESSAGES:]
 
-        # Add current user request
+            messages = messages[
+                -MAX_HISTORY_MESSAGES:
+            ]
+
         messages.append(
             {
                 "role": "user",
@@ -54,102 +66,73 @@ def run_research(
             }
         )
 
-        # Update state with messages actually sent to the agent
         state["messages"] = messages
-
-        # Limit agent execution
-        config = {
-            "recursion_limit": MAX_AGENT_STEPS,
-        }
-
-        # Keep execution connected to the current session
-        if thread_id:
-            config["configurable"] = {
-                "thread_id": thread_id,
-            }
 
         result = agent.invoke(
             {
                 "messages": messages,
-            },
-            config=config,
+            }
         )
 
-        execution_time = time.perf_counter() - start_time
+        execution_time = (
+            time.perf_counter()
+            - start_time
+        )
 
-        result_messages = result.get("messages", [])
+        # --------------------------------------------------
+        # GET RESULT FROM REACT AGENT
+        # --------------------------------------------------
 
-        final_answer = ""
-        tools_used = []
-        sources = []
+        if isinstance(result, dict):
 
-        # Read agent execution messages
-        for message in result_messages:
+            final_answer = result.get(
+                "answer",
+                "",
+            )
 
-            # Detect tool calls made by the agent
-            if hasattr(message, "tool_calls"):
+            tools_used = result.get(
+                "tools_used",
+                [],
+            )
 
-                for tool_call in message.tool_calls:
+            sources = result.get(
+                "sources",
+                [],
+            )
 
-                    tool_name = tool_call.get("name")
+        else:
 
-                    if tool_name and tool_name not in tools_used:
-                        tools_used.append(tool_name)
+            final_answer = str(result)
 
-            # Detect tool result messages
-            if hasattr(message, "name") and message.name:
+            tools_used = []
 
-                if message.name not in tools_used:
-                    tools_used.append(message.name)
+            sources = []
 
-                # Extract sources from get_news
-                if message.name == "get_news":
+        if not final_answer:
 
-                    try:
-                        tool_data = json.loads(message.content)
+            final_answer = (
+                "The agent did not return an answer."
+            )
 
-                        articles = tool_data.get(
-                            "articles",
-                            [],
-                        )
+        # --------------------------------------------------
+        # UPDATE STATE
+        # --------------------------------------------------
 
-                        for article in articles:
-
-                            title = article.get(
-                                "title",
-                                "",
-                            )
-
-                            url = article.get(
-                                "url",
-                                "",
-                            )
-
-                            if title and url:
-                                sources.append(
-                                    {
-                                        "title": title,
-                                        "url": url,
-                                    }
-                                )
-
-                    except (
-                        json.JSONDecodeError,
-                        TypeError,
-                    ):
-                        pass
-
-            # Keep the latest text response
-            if hasattr(message, "content") and message.content:
-
-                if isinstance(message.content, str):
-                    final_answer = message.content
-
-        # Update state after execution
         state["sources"] = sources
+
         state["tools_used"] = tools_used
-        state["execution_time"] = execution_time
-        state["final_answer"] = final_answer
+
+        state["execution_time"] = (
+            execution_time
+        )
+
+        state["final_answer"] = (
+            final_answer
+        )
+
+        # --------------------------------------------------
+        # LOG SUCCESS
+        # --------------------------------------------------
 
         log_agent_success(
             thread_id=thread_id,
@@ -157,40 +140,58 @@ def run_research(
             execution_time=execution_time,
         )
 
+        # --------------------------------------------------
+        # RETURN
+        # --------------------------------------------------
+
         return {
-            "answer": state["final_answer"],
-            "sources": state["sources"],
-            "tools_used": state["tools_used"],
+            "answer": final_answer,
+            "sources": sources,
+            "tools_used": tools_used,
             "execution_time": round(
-                state["execution_time"],
+                execution_time,
                 2,
             ),
         }
 
     except TimeoutError as error:
 
-        log_agent_error(thread_id, error)
+        log_agent_error(
+            thread_id,
+            error,
+        )
 
         return {
-            "answer": "The research request timed out. Please try again.",
+            "answer": (
+                "The research request timed out. "
+                "Please try again."
+            ),
             "sources": [],
             "tools_used": [],
             "execution_time": round(
-                time.perf_counter() - start_time,
+                time.perf_counter()
+                - start_time,
                 2,
             ),
         }
 
     except Exception as error:
 
-        log_agent_error(thread_id, error)
+        log_agent_error(
+            thread_id,
+            error,
+        )
 
         return {
-            "answer": f"Agent execution failed: {str(error)}",
+            "answer": (
+                f"Agent execution failed: "
+                f"{str(error)}"
+            ),
             "sources": [],
             "tools_used": [],
             "execution_time": round(
-                time.perf_counter() - start_time,
+                time.perf_counter()
+                - start_time,
                 2,
             ),
         }
